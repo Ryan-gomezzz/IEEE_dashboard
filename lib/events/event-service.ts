@@ -283,83 +283,95 @@ async function updateEventStatus(eventId: string) {
   // Create missing approval records as the workflow advances
   if (newStatus === 'treasurer_pending') {
     if (!approvalStatus.treasurer.approved && approvalStatus.treasurer.pending === 0) {
-      const { data: allUsers, error: usersError } = await supabase
-        .from('users')
-        .select('id, role:roles(*)');
+      try {
+        const { data: allUsers, error: usersError } = await supabase
+          .from('users')
+          .select('id, role:roles(*)');
 
-      if (usersError) {
-        console.error('Error fetching users for treasurer approval:', usersError);
-        throw new Error(`Failed to fetch users for treasurer approval: ${usersError.message}`);
+        if (usersError) {
+          console.error('Error fetching users for treasurer approval:', usersError);
+          throw new Error(`Failed to fetch users for treasurer approval: ${usersError.message}`);
+        }
+
+        if (!allUsers || allUsers.length === 0) {
+          throw new Error('No users found to create treasurer approval record');
+        }
+
+        // Handle role response - it can be an object or array
+        const treasurer = allUsers.find((u: any) => {
+          const role = Array.isArray(u.role) ? u.role[0] : u.role;
+          return role?.name === ROLE_NAMES.SB_TREASURER;
+        });
+
+        if (!treasurer) {
+          throw new Error('SB Treasurer role not found in users table. Cannot proceed with approval workflow.');
+        }
+
+        const { error: insertError } = await supabase.from('event_approvals').insert({
+          event_id: eventId,
+          approver_id: treasurer.id,
+          approval_type: 'treasurer',
+          status: 'pending',
+        });
+
+        if (insertError) {
+          console.error('Error creating treasurer approval record:', insertError);
+          throw new Error(`Failed to create treasurer approval record: ${insertError.message}`);
+        }
+
+        console.log(`Created treasurer approval record for event ${eventId}`);
+      } catch (error) {
+        // For treasurer, we should throw because the workflow can't proceed without it
+        console.error(`Critical error creating treasurer approval record for event ${eventId}:`, error);
+        throw error;
       }
-
-      if (!allUsers || allUsers.length === 0) {
-        throw new Error('No users found to create treasurer approval record');
-      }
-
-      // Handle role response - it can be an object or array
-      const treasurer = allUsers.find((u: any) => {
-        const role = Array.isArray(u.role) ? u.role[0] : u.role;
-        return role?.name === ROLE_NAMES.SB_TREASURER;
-      });
-
-      if (!treasurer) {
-        throw new Error('SB Treasurer role not found in users table. Cannot proceed with approval workflow.');
-      }
-
-      const { error: insertError } = await supabase.from('event_approvals').insert({
-        event_id: eventId,
-        approver_id: treasurer.id,
-        approval_type: 'treasurer',
-        status: 'pending',
-      });
-
-      if (insertError) {
-        console.error('Error creating treasurer approval record:', insertError);
-        throw new Error(`Failed to create treasurer approval record: ${insertError.message}`);
-      }
-
-      console.log(`Created treasurer approval record for event ${eventId}`);
     }
   }
 
   if (newStatus === 'counsellor_pending') {
     if (!approvalStatus.counsellor.approved && approvalStatus.counsellor.pending === 0) {
-      const { data: allUsers, error: usersError } = await supabase
-        .from('users')
-        .select('id, role:roles(*)');
+      try {
+        const { data: allUsers, error: usersError } = await supabase
+          .from('users')
+          .select('id, role:roles(*)');
 
-      if (usersError) {
-        console.error('Error fetching users for counsellor approval:', usersError);
-        throw new Error(`Failed to fetch users for counsellor approval: ${usersError.message}`);
+        if (usersError) {
+          console.error('Error fetching users for counsellor approval:', usersError);
+          console.warn(`Warning: Could not create counsellor approval record for event ${eventId}. Status will still be updated to counsellor_pending.`);
+          // Don't throw - allow status update to proceed
+        } else if (!allUsers || allUsers.length === 0) {
+          console.warn(`Warning: No users found. Could not create counsellor approval record for event ${eventId}. Status will still be updated to counsellor_pending.`);
+        } else {
+          // Handle role response - it can be an object or array
+          const counsellor = allUsers.find((u: any) => {
+            const role = Array.isArray(u.role) ? u.role[0] : u.role;
+            return role?.name === ROLE_NAMES.SB_COUNSELLOR;
+          });
+
+          if (!counsellor) {
+            console.warn(`Warning: Branch Counsellor user not found in database. Please ensure branch.counsellor@ieee.org user exists. Status will still be updated to counsellor_pending.`);
+            console.warn(`To fix: Run the seed script (node scripts/seed-database.js) to create the Branch Counsellor user.`);
+          } else {
+            const { error: insertError } = await supabase.from('event_approvals').insert({
+              event_id: eventId,
+              approver_id: counsellor.id,
+              approval_type: 'counsellor',
+              status: 'pending',
+            });
+
+            if (insertError) {
+              console.error('Error creating counsellor approval record:', insertError);
+              console.warn(`Warning: Could not create counsellor approval record. Status will still be updated to counsellor_pending.`);
+            } else {
+              console.log(`Created counsellor approval record for event ${eventId}`);
+            }
+          }
+        }
+      } catch (error) {
+        // Log but don't throw - allow status update to proceed
+        console.error(`Error in counsellor approval record creation for event ${eventId}:`, error);
+        console.warn(`Status will still be updated to counsellor_pending.`);
       }
-
-      if (!allUsers || allUsers.length === 0) {
-        throw new Error('No users found to create counsellor approval record');
-      }
-
-      // Handle role response - it can be an object or array
-      const counsellor = allUsers.find((u: any) => {
-        const role = Array.isArray(u.role) ? u.role[0] : u.role;
-        return role?.name === ROLE_NAMES.SB_COUNSELLOR;
-      });
-
-      if (!counsellor) {
-        throw new Error('Branch Counsellor role not found in users table. Cannot proceed with approval workflow.');
-      }
-
-      const { error: insertError } = await supabase.from('event_approvals').insert({
-        event_id: eventId,
-        approver_id: counsellor.id,
-        approval_type: 'counsellor',
-        status: 'pending',
-      });
-
-      if (insertError) {
-        console.error('Error creating counsellor approval record:', insertError);
-        throw new Error(`Failed to create counsellor approval record: ${insertError.message}`);
-      }
-
-      console.log(`Created counsellor approval record for event ${eventId}`);
     }
   }
 
