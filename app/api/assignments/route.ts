@@ -39,16 +39,47 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check if event is approved
+    // Check if event is approved (Workflow 2: assignments only for approved events)
     const { data: event } = await supabase
       .from('events')
       .select('*')
       .eq('id', validatedData.event_id)
       .single();
 
-    if (!event || event.status !== 'approved') {
+    if (!event) {
       return NextResponse.json(
-        { error: 'Event must be approved before assigning teams' },
+        { error: 'Event not found' },
+        { status: 404 }
+      );
+    }
+
+    if (event.status !== 'approved') {
+      return NextResponse.json(
+        { error: `Event must be approved before assigning teams. Current status: ${event.status}` },
+        { status: 400 }
+      );
+    }
+
+    // Verify assigned user exists and is a valid execom member
+    const { data: assignedUser } = await supabase
+      .from('users')
+      .select('id, role:roles(*)')
+      .eq('id', validatedData.assigned_to)
+      .single();
+
+    if (!assignedUser) {
+      return NextResponse.json(
+        { error: 'Assigned user not found' },
+        { status: 404 }
+      );
+    }
+
+    // Optional: Verify user is an execom member (level 5) or team member
+    const assignedRole = Array.isArray((assignedUser as any)?.role) ? (assignedUser as any).role[0] : (assignedUser as any)?.role;
+    const assignedRoleLevel = assignedRole?.level;
+    if (assignedRoleLevel && assignedRoleLevel > 5) {
+      return NextResponse.json(
+        { error: 'Assigned user must be an execom member or team member' },
         { status: 400 }
       );
     }

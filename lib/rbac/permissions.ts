@@ -53,22 +53,22 @@ const PERMISSIONS_BY_LEVEL: Record<number, Permission[]> = {
     Permission.VIEW_CHAPTER_DOCUMENTS,
   ],
   [ROLE_LEVELS.VICE_CORE]: [
-    Permission.VIEW_EVENTS,
-    Permission.CREATE_EVENT,
-    Permission.VIEW_ASSIGNMENTS,
+    Permission.VIEW_EVENTS, // View workflows
+    Permission.VIEW_ASSIGNMENTS, // Assist in reviews (view only)
     Permission.VIEW_CALENDAR,
     Permission.UPLOAD_DOCUMENT,
-    Permission.UPLOAD_CHAPTER_DOCUMENT,
     Permission.VIEW_CHAPTER_DOCUMENTS,
+    // No CREATE_EVENT, no approval permissions (no final approval authority)
   ],
   [ROLE_LEVELS.CHAPTER_LEADERSHIP]: [
     Permission.VIEW_EVENTS,
-    Permission.CREATE_EVENT,
-    Permission.VIEW_ASSIGNMENTS,
+    Permission.CREATE_EVENT, // Propose events
+    Permission.VIEW_ASSIGNMENTS, // View approval status
     Permission.VIEW_CALENDAR,
     Permission.UPLOAD_DOCUMENT,
-    Permission.UPLOAD_CHAPTER_DOCUMENT,
+    Permission.UPLOAD_CHAPTER_DOCUMENT, // Upload chapter documents
     Permission.VIEW_CHAPTER_DOCUMENTS,
+    Permission.ASSIGN_EXECOM, // Assign proctors (within chapter)
   ],
   [ROLE_LEVELS.TEAMS]: [
     Permission.VIEW_EVENTS,
@@ -80,6 +80,9 @@ const PERMISSIONS_BY_LEVEL: Record<number, Permission[]> = {
   [ROLE_LEVELS.EXECOM]: [
     Permission.VIEW_EVENTS,
     Permission.VIEW_CALENDAR,
+    Permission.VIEW_ASSIGNMENTS,
+    Permission.VIEW_CHAPTER_DOCUMENTS,
+    Permission.UPLOAD_DOCUMENT, // Can upload work if assigned
   ],
 };
 

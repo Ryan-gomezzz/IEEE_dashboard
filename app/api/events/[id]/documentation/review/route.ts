@@ -27,7 +27,15 @@ export async function POST(
       .eq('id', session.userId)
       .single();
 
-    if (!user || !isSbSecretary(user.role.name)) {
+    if (!user) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
+    }
+
+    // Handle role response - it can be an object or array
+    const role = Array.isArray((user as any)?.role) ? (user as any).role[0] : (user as any)?.role;
+    const roleName = role?.name;
+
+    if (!isSbSecretary(roleName)) {
       return NextResponse.json(
         { error: 'Only Student Branch Secretary can review final documentation' },
         { status: 403 }
@@ -47,7 +55,29 @@ export async function POST(
 
     if (event.status !== 'documentation_submitted') {
       return NextResponse.json(
-        { error: 'Event is not awaiting documentation review' },
+        { error: `Event is not awaiting documentation review. Current status: ${event.status}` },
+        { status: 400 }
+      );
+    }
+
+    // Verify document exists, belongs to event, and is a final_document
+    const { data: document } = await supabase
+      .from('event_documents')
+      .select('*')
+      .eq('id', validatedData.document_id)
+      .eq('event_id', params.id)
+      .single();
+
+    if (!document) {
+      return NextResponse.json(
+        { error: 'Document not found or does not belong to this event' },
+        { status: 404 }
+      );
+    }
+
+    if (document.document_type !== 'final_document') {
+      return NextResponse.json(
+        { error: 'Only final documents can be reviewed by Secretary' },
         { status: 400 }
       );
     }

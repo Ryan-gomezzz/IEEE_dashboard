@@ -23,15 +23,19 @@ BEGIN
 END $$;
 
 -- Enforce: 1 proctor -> max 5 mentees (trigger)
+-- Workflow 4 Step 2: Each proctor -> maximum 5 execoms
 CREATE OR REPLACE FUNCTION enforce_proctor_max_mentees()
 RETURNS TRIGGER AS $$
 DECLARE
   mentee_count INTEGER;
 BEGIN
+  -- Count existing mentees for this proctor (excluding the current row if updating)
   SELECT COUNT(*) INTO mentee_count
   FROM proctor_mappings
-  WHERE proctor_id = NEW.proctor_id;
+  WHERE proctor_id = NEW.proctor_id
+    AND (TG_OP = 'INSERT' OR id != NEW.id);
 
+  -- Check if adding this new mentee would exceed the limit
   IF mentee_count >= 5 THEN
     RAISE EXCEPTION 'Proctor % already has maximum 5 mentees', NEW.proctor_id
       USING ERRCODE = 'check_violation';
@@ -43,7 +47,7 @@ $$ LANGUAGE plpgsql;
 
 DROP TRIGGER IF EXISTS trg_enforce_proctor_max_mentees ON proctor_mappings;
 CREATE TRIGGER trg_enforce_proctor_max_mentees
-BEFORE INSERT ON proctor_mappings
+BEFORE INSERT OR UPDATE ON proctor_mappings
 FOR EACH ROW
 EXECUTE FUNCTION enforce_proctor_max_mentees();
 

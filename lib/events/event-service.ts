@@ -43,61 +43,57 @@ export async function createEventProposal(data: {
 async function createApprovalRecords(eventId: string, proposedBy: string) {
   const supabase = await createServiceClient();
 
-  try {
-    // Get users and roles so we can pick the exact 5 Senior Core approvers.
-    // Use standard pattern: select full role object to handle both array and object responses
-    const { data: allUsers, error: usersError } = await supabase
-      .from('users')
-      .select('id, role:roles(*)')
-      .neq('id', proposedBy);
+  // Get users and roles so we can pick the exact 5 Senior Core approvers.
+  // Use standard pattern: select full role object to handle both array and object responses
+  const { data: allUsers, error: usersError } = await supabase
+    .from('users')
+    .select('id, role:roles(*)')
+    .neq('id', proposedBy);
 
-    if (usersError) {
-      console.error('Error fetching users for approval records:', usersError);
-      throw usersError;
-    }
-
-    if (!allUsers || allUsers.length === 0) {
-      console.warn('No users found to create approval records');
-      return;
-    }
-
-    // Handle role response - it can be an object or array depending on Supabase version
-    const seniorCore = allUsers.filter((user: any) => {
-      const role = Array.isArray(user.role) ? user.role[0] : user.role;
-      const roleName = role?.name;
-      return roleName && isSeniorCoreApprover(roleName);
-    });
-
-    if (seniorCore.length === 0) {
-      console.warn('No Senior Core approvers found to create approval records');
-      return;
-    }
-
-    console.log(`Creating approval records for ${seniorCore.length} Senior Core members for event ${eventId}`);
-
-    // Create senior core approval records
-    const approvalRecords = seniorCore.map((member) => ({
-      event_id: eventId,
-      approver_id: member.id,
-      approval_type: 'senior_core' as const,
-      status: 'pending' as const,
-    }));
-
-    const { error: insertError } = await supabase
-      .from('event_approvals')
-      .insert(approvalRecords);
-
-    if (insertError) {
-      console.error('Error creating approval records:', insertError);
-      throw insertError;
-    }
-
-    console.log(`Successfully created ${approvalRecords.length} approval records`);
-  } catch (error) {
-    console.error('Failed to create approval records:', error);
-    // Don't throw - we want event creation to succeed even if approval record creation fails
-    // The error is logged for debugging
+  if (usersError) {
+    console.error('Error fetching users for approval records:', usersError);
+    throw new Error(`Failed to fetch users for approval records: ${usersError.message}`);
   }
+
+  if (!allUsers || allUsers.length === 0) {
+    throw new Error('No users found to create approval records');
+  }
+
+  // Handle role response - it can be an object or array depending on Supabase version
+  const seniorCore = allUsers.filter((user: any) => {
+    const role = Array.isArray(user.role) ? user.role[0] : user.role;
+    const roleName = role?.name;
+    return roleName && isSeniorCoreApprover(roleName);
+  });
+
+  if (seniorCore.length === 0) {
+    throw new Error('No Senior Core approvers found. At least one Senior Core member must exist to create approval records.');
+  }
+
+  if (seniorCore.length < 2) {
+    throw new Error(`Only ${seniorCore.length} Senior Core approver(s) found. Minimum 2 required for approval workflow.`);
+  }
+
+  console.log(`Creating approval records for ${seniorCore.length} Senior Core members for event ${eventId}`);
+
+  // Create senior core approval records - ensure no duplicates
+  const approvalRecords = seniorCore.map((member) => ({
+    event_id: eventId,
+    approver_id: member.id,
+    approval_type: 'senior_core' as const,
+    status: 'pending' as const,
+  }));
+
+  const { error: insertError } = await supabase
+    .from('event_approvals')
+    .insert(approvalRecords);
+
+  if (insertError) {
+    console.error('Error creating approval records:', insertError);
+    throw new Error(`Failed to create approval records: ${insertError.message}`);
+  }
+
+  console.log(`Successfully created ${approvalRecords.length} approval records`);
 }
 
 export async function getEventApprovalStatus(eventId: string) {
@@ -112,7 +108,14 @@ export async function getEventApprovalStatus(eventId: string) {
   const treasurerApprovals = approvals?.filter(a => a.approval_type === 'treasurer') || [];
   const counsellorApprovals = approvals?.filter(a => a.approval_type === 'counsellor') || [];
 
-  const seniorCoreApproved = seniorCoreApprovals.filter(a => a.status === 'approved').length;
+  // Count distinct approvers who have approved (Workflow 1: Minimum 2 distinct approvals required)
+  const approvedSeniorCoreApprovers = new Set(
+    seniorCoreApprovals
+      .filter(a => a.status === 'approved')
+      .map(a => a.approver_id)
+  );
+  const seniorCoreApproved = approvedSeniorCoreApprovers.size;
+
   const treasurerApproved = treasurerApprovals.some(a => a.status === 'approved');
   const counsellorApproved = counsellorApprovals.some(a => a.status === 'approved');
 
@@ -122,6 +125,7 @@ export async function getEventApprovalStatus(eventId: string) {
       approved: seniorCoreApproved,
       pending: seniorCoreApprovals.filter(a => a.status === 'pending').length,
       rejected: seniorCoreApprovals.some(a => a.status === 'rejected'),
+      distinctApprovers: approvedSeniorCoreApprovers.size,
     },
     treasurer: {
       required: 1,
@@ -195,7 +199,12 @@ export async function submitApproval(data: {
 
   if (existing.status !== 'pending') {
     console.warn(`Approval ${existing.id} is no longer pending (current status: ${existing.status})`);
-    throw new Error('This approval is no longer pending');
+    throw new Error(`This approval is no longer pending (current status: ${existing.status})`);
+  }
+
+  // Prevent duplicate approval from same approver
+  if (data.status === 'approved' && existing.status === 'approved') {
+    throw new Error('You have already approved this event');
   }
 
   const { error: updateError } = await supabase
@@ -258,87 +267,83 @@ async function updateEventStatus(eventId: string) {
   // Create missing approval records as the workflow advances
   if (newStatus === 'treasurer_pending') {
     if (!approvalStatus.treasurer.approved && approvalStatus.treasurer.pending === 0) {
-      try {
-        const { data: allUsers, error: usersError } = await supabase
-          .from('users')
-          .select('id, role:roles(*)');
+      const { data: allUsers, error: usersError } = await supabase
+        .from('users')
+        .select('id, role:roles(*)');
 
-        if (usersError) {
-          console.error('Error fetching users for treasurer approval:', usersError);
-          throw usersError;
-        }
-
-        // Handle role response - it can be an object or array
-        const treasurer = allUsers?.find((u: any) => {
-          const role = Array.isArray(u.role) ? u.role[0] : u.role;
-          return role?.name === ROLE_NAMES.SB_TREASURER;
-        });
-
-        if (!treasurer) {
-          console.error('SB Treasurer role not found in users table');
-          throw new Error('SB Treasurer role not found in users table');
-        }
-
-        const { error: insertError } = await supabase.from('event_approvals').insert({
-          event_id: eventId,
-          approver_id: treasurer.id,
-          approval_type: 'treasurer',
-          status: 'pending',
-        });
-
-        if (insertError) {
-          console.error('Error creating treasurer approval record:', insertError);
-          throw insertError;
-        }
-
-        console.log(`Created treasurer approval record for event ${eventId}`);
-      } catch (error) {
-        console.error('Failed to create treasurer approval record:', error);
-        // Don't throw - allow workflow to continue
+      if (usersError) {
+        console.error('Error fetching users for treasurer approval:', usersError);
+        throw new Error(`Failed to fetch users for treasurer approval: ${usersError.message}`);
       }
+
+      if (!allUsers || allUsers.length === 0) {
+        throw new Error('No users found to create treasurer approval record');
+      }
+
+      // Handle role response - it can be an object or array
+      const treasurer = allUsers.find((u: any) => {
+        const role = Array.isArray(u.role) ? u.role[0] : u.role;
+        return role?.name === ROLE_NAMES.SB_TREASURER;
+      });
+
+      if (!treasurer) {
+        throw new Error('SB Treasurer role not found in users table. Cannot proceed with approval workflow.');
+      }
+
+      const { error: insertError } = await supabase.from('event_approvals').insert({
+        event_id: eventId,
+        approver_id: treasurer.id,
+        approval_type: 'treasurer',
+        status: 'pending',
+      });
+
+      if (insertError) {
+        console.error('Error creating treasurer approval record:', insertError);
+        throw new Error(`Failed to create treasurer approval record: ${insertError.message}`);
+      }
+
+      console.log(`Created treasurer approval record for event ${eventId}`);
     }
   }
 
   if (newStatus === 'counsellor_pending') {
     if (!approvalStatus.counsellor.approved && approvalStatus.counsellor.pending === 0) {
-      try {
-        const { data: allUsers, error: usersError } = await supabase
-          .from('users')
-          .select('id, role:roles(*)');
+      const { data: allUsers, error: usersError } = await supabase
+        .from('users')
+        .select('id, role:roles(*)');
 
-        if (usersError) {
-          console.error('Error fetching users for counsellor approval:', usersError);
-          throw usersError;
-        }
-
-        // Handle role response - it can be an object or array
-        const counsellor = allUsers?.find((u: any) => {
-          const role = Array.isArray(u.role) ? u.role[0] : u.role;
-          return role?.name === ROLE_NAMES.SB_COUNSELLOR;
-        });
-
-        if (!counsellor) {
-          console.error('Branch Counsellor role not found in users table');
-          throw new Error('Branch Counsellor role not found in users table');
-        }
-
-        const { error: insertError } = await supabase.from('event_approvals').insert({
-          event_id: eventId,
-          approver_id: counsellor.id,
-          approval_type: 'counsellor',
-          status: 'pending',
-        });
-
-        if (insertError) {
-          console.error('Error creating counsellor approval record:', insertError);
-          throw insertError;
-        }
-
-        console.log(`Created counsellor approval record for event ${eventId}`);
-      } catch (error) {
-        console.error('Failed to create counsellor approval record:', error);
-        // Don't throw - allow workflow to continue
+      if (usersError) {
+        console.error('Error fetching users for counsellor approval:', usersError);
+        throw new Error(`Failed to fetch users for counsellor approval: ${usersError.message}`);
       }
+
+      if (!allUsers || allUsers.length === 0) {
+        throw new Error('No users found to create counsellor approval record');
+      }
+
+      // Handle role response - it can be an object or array
+      const counsellor = allUsers.find((u: any) => {
+        const role = Array.isArray(u.role) ? u.role[0] : u.role;
+        return role?.name === ROLE_NAMES.SB_COUNSELLOR;
+      });
+
+      if (!counsellor) {
+        throw new Error('Branch Counsellor role not found in users table. Cannot proceed with approval workflow.');
+      }
+
+      const { error: insertError } = await supabase.from('event_approvals').insert({
+        event_id: eventId,
+        approver_id: counsellor.id,
+        approval_type: 'counsellor',
+        status: 'pending',
+      });
+
+      if (insertError) {
+        console.error('Error creating counsellor approval record:', insertError);
+        throw new Error(`Failed to create counsellor approval record: ${insertError.message}`);
+      }
+
+      console.log(`Created counsellor approval record for event ${eventId}`);
     }
   }
 
@@ -346,8 +351,32 @@ async function updateEventStatus(eventId: string) {
     if (newStatus !== currentEvent.status) {
       console.log(`Status changed for event ${eventId}: ${currentEvent.status} -> ${newStatus}`);
 
+      // Handle calendar block updates for rejections (decrement if was approved)
+      if (newStatus === 'rejected' && CALENDAR_COUNTED_STATUSES.includes(currentEvent.status as EventStatus)) {
+        try {
+          await updateCalendarBlock(new Date(currentEvent.proposed_date), false);
+          console.log(`Calendar block decremented for rejected event ${eventId}`);
+        } catch (calendarError) {
+          console.error(`Error decrementing calendar block for rejected event ${eventId}:`, calendarError);
+        }
+      }
+
       // 1. Update Database
       if (newStatus === 'approved') {
+        // Validate calendar availability at approval time (prevents race conditions)
+        try {
+          const { checkDateAvailability } = await import('@/lib/calendar/calendar-service');
+          const proposedDate = new Date(currentEvent.proposed_date);
+          const availability = await checkDateAvailability(proposedDate);
+          
+          if (!availability.available) {
+            throw new Error(`Cannot approve event: ${availability.reason}`);
+          }
+        } catch (calendarError: any) {
+          console.error(`Calendar validation failed for event ${eventId}:`, calendarError);
+          throw new Error(`Calendar validation failed: ${calendarError.message || calendarError.reason || 'Maximum 2 events per day limit reached'}`);
+        }
+
         const { error: updateError } = await supabase
           .from('events')
           .update({
@@ -395,6 +424,14 @@ async function updateEventStatus(eventId: string) {
         } catch (calendarError) {
           console.error(`Error updating calendar block for event ${eventId}:`, calendarError);
           // Don't throw - event status update should succeed even if calendar update fails
+        }
+      } else if (wasCounted && !isCounted) {
+        // Transition OUT of counted state -> Decrement (e.g., if event is rejected after approval)
+        try {
+          await updateCalendarBlock(new Date(currentEvent.proposed_date), false);
+          console.log(`Calendar block decremented for event ${eventId}`);
+        } catch (calendarError) {
+          console.error(`Error decrementing calendar block for event ${eventId}:`, calendarError);
         }
       }
     } else {

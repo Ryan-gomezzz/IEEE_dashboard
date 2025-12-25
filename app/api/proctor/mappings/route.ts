@@ -64,6 +64,33 @@ export async function POST(request: NextRequest) {
       }
     }
 
+    // Check if execom is already assigned to another proctor (Workflow 4: unique execom constraint)
+    const { data: existingExecomMapping } = await supabase
+      .from('proctor_mappings')
+      .select('*')
+      .eq('execom_id', validated.execom_id)
+      .single();
+
+    if (existingExecomMapping) {
+      return NextResponse.json(
+        { error: 'This execom is already assigned to another proctor. Each execom can only have one proctor.' },
+        { status: 400 }
+      );
+    }
+
+    // Check current mentee count for proctor (Workflow 4: max 5 execoms per proctor)
+    const { count: menteeCount } = await supabase
+      .from('proctor_mappings')
+      .select('*', { count: 'exact', head: true })
+      .eq('proctor_id', validated.proctor_id);
+
+    if (menteeCount !== null && menteeCount >= 5) {
+      return NextResponse.json(
+        { error: 'Proctor already has maximum 5 mentees. Cannot assign more execoms.' },
+        { status: 400 }
+      );
+    }
+
     const { data: mapping, error } = await supabase
       .from('proctor_mappings')
       .insert({
@@ -74,7 +101,21 @@ export async function POST(request: NextRequest) {
       .single();
 
     if (error) {
-      // Unique constraints / max-5 trigger bubble up here
+      // Handle database constraint violations with better error messages
+      if (error.code === '23505') { // Unique constraint violation
+        if (error.message.includes('proctor_mappings_unique_execom')) {
+          return NextResponse.json(
+            { error: 'This execom is already assigned to another proctor' },
+            { status: 400 }
+          );
+        }
+      }
+      if (error.code === 'P0001') { // Trigger exception (max 5 mentees)
+        return NextResponse.json(
+          { error: 'Proctor already has maximum 5 mentees' },
+          { status: 400 }
+        );
+      }
       throw error;
     }
 
