@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
     // Get user's chapter
     const { data: user } = await supabase
       .from('users')
-      .select('chapter_id, role:roles(name)')
+      .select('chapter_id, role:roles(*)')
       .eq('id', session.userId)
       .single();
 
@@ -64,7 +64,9 @@ export async function POST(request: NextRequest) {
     }
 
     // Workflow 5 Step 1: only Chapter Chair / Secretary can upload
-    const roleName = (user as any)?.role?.name ?? (user as any)?.role?.[0]?.name;
+    // Handle role response - it can be an object or array
+    const role = Array.isArray((user as any)?.role) ? (user as any).role[0] : (user as any)?.role;
+    const roleName = role?.name;
     if (!isChapterChair(roleName) && !isChapterSecretary(roleName)) {
       return NextResponse.json(
         { error: 'Only Chapter Chair / Secretary can upload chapter documents' },

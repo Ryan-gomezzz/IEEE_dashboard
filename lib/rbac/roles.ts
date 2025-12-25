@@ -61,25 +61,39 @@ export function isSbSecretary(roleName: string): boolean {
 }
 
 export function isChapterChair(roleName: string): boolean {
-  return roleName === ROLE_NAMES.CHAPTER_CHAIR;
+  if (!roleName) return false;
+  // Check if role name ends with "Chair" but not "Vice Chair" and not "SB Chair"
+  // This matches "RAS Chair", "CS Chair", "PES Chair", etc., but not "SB Chair"
+  const upperName = roleName.toUpperCase();
+  return upperName.endsWith(' CHAIR') && !upperName.startsWith('SB ') && !upperName.includes('VICE');
 }
 
 export function isChapterSecretary(roleName: string): boolean {
-  return roleName === ROLE_NAMES.CHAPTER_SECRETARY;
+  if (!roleName) return false;
+  // Check if role name ends with "Secretary" but not "Vice Secretary"
+  // This matches "RAS Secretary", "CS Secretary", etc., or generic "Secretary"
+  const upperName = roleName.toUpperCase();
+  return (upperName.endsWith(' SECRETARY') || upperName === 'SECRETARY') && !upperName.includes('VICE');
 }
 
 export function isChapterViceChair(roleName: string): boolean {
-  return roleName === ROLE_NAMES.CHAPTER_VICE_CHAIR;
+  if (!roleName) return false;
+  // Check if role name contains "Vice Chair"
+  const upperName = roleName.toUpperCase();
+  return upperName.includes('VICE') && upperName.includes('CHAIR');
 }
 
 export function canCreateEventProposal(roleName: string): boolean {
+  if (!roleName) return false;
   // Workflow 1 Step 1: Chapter Chair / Vice Chair / Secretary
+  // This includes all chapter chairs (RAS Chair, CS Chair, etc.), vice chairs, and secretaries
   return isChapterChair(roleName) || isChapterViceChair(roleName) || isChapterSecretary(roleName);
 }
 
 export function canAssignProctors(roleName: string): boolean {
+  if (!roleName) return false;
   // Workflow 4 Step 1: Student Branch Chair / Student Branch Secretary / Chapter Chair
-  return roleName === ROLE_NAMES.SB_CHAIR || roleName === ROLE_NAMES.SB_SECRETARY || roleName === ROLE_NAMES.CHAPTER_CHAIR;
+  return roleName === ROLE_NAMES.SB_CHAIR || roleName === ROLE_NAMES.SB_SECRETARY || isChapterChair(roleName);
 }
 
 export function isTeamHead(roleName: string, teamType: 'documentation' | 'pr' | 'design' | 'coverage'): boolean {

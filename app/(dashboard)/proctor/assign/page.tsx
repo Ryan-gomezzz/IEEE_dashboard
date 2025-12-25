@@ -2,7 +2,7 @@ import { PageHeader } from '@/components/layout/PageHeader';
 import { Card, CardContent } from '@/components/ui/Card';
 import { requireAuth } from '@/lib/auth/session';
 import { createServiceClient } from '@/lib/supabase/server';
-import { ROLE_NAMES, canAssignProctors } from '@/lib/rbac/roles';
+import { ROLE_NAMES, canAssignProctors, isChapterChair } from '@/lib/rbac/roles';
 import { ProctorAssign } from '@/components/proctor/ProctorAssign';
 
 export default async function ProctorAssignPage() {
@@ -11,12 +11,13 @@ export default async function ProctorAssignPage() {
 
   const { data: user } = await supabase
     .from('users')
-    .select('id, chapter_id, role:roles(name)')
+    .select('id, chapter_id, role:roles(*)')
     .eq('id', session.userId)
     .single();
 
-  // Supabase typed joins can model role as array in TS; normalize defensively.
-  const roleName = (user as any)?.role?.name ?? (user as any)?.role?.[0]?.name;
+  // Handle role response - it can be an object or array
+  const role = Array.isArray((user as any)?.role) ? (user as any).role[0] : (user as any)?.role;
+  const roleName = role?.name;
 
   if (!user || !canAssignProctors(roleName)) {
     return (
@@ -36,14 +37,14 @@ export default async function ProctorAssignPage() {
   // Candidate pool:
   // - SB Chair / SB Secretary can assign across all
   // - Chapter Chair limited to their chapter (enforced server-side too)
-  const isChapterChair = roleName === ROLE_NAMES.CHAPTER_CHAIR;
+  const userIsChapterChair = isChapterChair(roleName);
 
   let usersQuery = supabase
     .from('users')
     .select('id, name, email, chapter_id, role:roles(level,name)')
     .order('name', { ascending: true });
 
-  if (isChapterChair) {
+  if (userIsChapterChair) {
     usersQuery = usersQuery.eq('chapter_id', user.chapter_id);
   }
 

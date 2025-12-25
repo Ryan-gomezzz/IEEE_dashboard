@@ -21,7 +21,7 @@ export async function POST(request: NextRequest) {
     // Enforce: only the corresponding Team Head can assign for their team_type (Workflow 2)
     const { data: assigner } = await supabase
       .from('users')
-      .select('id, role:roles(name)')
+      .select('id, role:roles(*)')
       .eq('id', session.userId)
       .single();
 
@@ -29,7 +29,9 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const assignerRoleName = (assigner as any)?.role?.name ?? (assigner as any)?.role?.[0]?.name;
+    // Handle role response - it can be an object or array
+    const role = Array.isArray((assigner as any)?.role) ? (assigner as any).role[0] : (assigner as any)?.role;
+    const assignerRoleName = role?.name;
     if (!isTeamHead(assignerRoleName, validatedData.team_type)) {
       return NextResponse.json(
         { error: 'Only the corresponding Team Head can assign for this team' },

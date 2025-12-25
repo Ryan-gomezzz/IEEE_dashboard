@@ -52,7 +52,7 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
         if (documentType === 'design_file') {
             const { data: uploader } = await supabase
                 .from('users')
-                .select('id, role:roles(name)')
+                .select('id, role:roles(*)')
                 .eq('id', session.userId)
                 .single();
 
@@ -60,7 +60,9 @@ export async function POST(request: NextRequest, { params }: { params: { id: str
                 return NextResponse.json({ error: 'User not found' }, { status: 404 });
             }
 
-            const uploaderRoleName = (uploader as any)?.role?.name ?? (uploader as any)?.role?.[0]?.name;
+            // Handle role response - it can be an object or array
+            const role = Array.isArray((uploader as any)?.role) ? (uploader as any).role[0] : (uploader as any)?.role;
+            const uploaderRoleName = role?.name;
             if (!isTeamHead(uploaderRoleName, 'design')) {
                 return NextResponse.json(
                     { error: 'Only Design Head can upload design files' },

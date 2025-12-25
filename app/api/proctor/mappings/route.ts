@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { requireAuth } from '@/lib/auth/session';
 import { z } from 'zod';
 import { createServiceClient } from '@/lib/supabase/server';
-import { canAssignProctors, ROLE_NAMES } from '@/lib/rbac/roles';
+import { canAssignProctors, isChapterChair, ROLE_NAMES } from '@/lib/rbac/roles';
 
 const mappingSchema = z.object({
   proctor_id: z.string().uuid(),
@@ -19,7 +19,7 @@ export async function POST(request: NextRequest) {
 
     const { data: assigner } = await supabase
       .from('users')
-      .select('id, chapter_id, role:roles(name)')
+      .select('id, chapter_id, role:roles(*)')
       .eq('id', session.userId)
       .single();
 
@@ -27,7 +27,10 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const assignerRoleName = (assigner as any)?.role?.name ?? (assigner as any)?.role?.[0]?.name;
+    // Handle role response - it can be an object or array
+    const role = Array.isArray((assigner as any)?.role) ? (assigner as any).role[0] : (assigner as any)?.role;
+    const assignerRoleName = role?.name;
+    
     if (!canAssignProctors(assignerRoleName)) {
       return NextResponse.json(
         { error: 'Permission denied: cannot assign proctors' },
@@ -36,7 +39,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Optional scoping: Chapter Chair can only assign within their chapter
-    if (assignerRoleName === ROLE_NAMES.CHAPTER_CHAIR) {
+    if (isChapterChair(assignerRoleName)) {
       const { data: proctorUser } = await supabase
         .from('users')
         .select('chapter_id')
@@ -100,7 +103,7 @@ export async function DELETE(request: NextRequest) {
 
     const { data: assigner } = await supabase
       .from('users')
-      .select('id, chapter_id, role:roles(name)')
+      .select('id, chapter_id, role:roles(*)')
       .eq('id', session.userId)
       .single();
 
@@ -108,7 +111,10 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
-    const assignerRoleName = (assigner as any)?.role?.name ?? (assigner as any)?.role?.[0]?.name;
+    // Handle role response - it can be an object or array
+    const role = Array.isArray((assigner as any)?.role) ? (assigner as any).role[0] : (assigner as any)?.role;
+    const assignerRoleName = role?.name;
+    
     if (!canAssignProctors(assignerRoleName)) {
       return NextResponse.json(
         { error: 'Permission denied: cannot modify proctor mappings' },
@@ -117,7 +123,7 @@ export async function DELETE(request: NextRequest) {
     }
 
     // Chapter Chair can only remove within their chapter
-    if (assignerRoleName === ROLE_NAMES.CHAPTER_CHAIR) {
+    if (isChapterChair(assignerRoleName)) {
       const { data: execomUser } = await supabase
         .from('users')
         .select('chapter_id')

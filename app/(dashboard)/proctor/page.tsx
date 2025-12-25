@@ -3,7 +3,7 @@ import { Card, CardContent } from '@/components/ui/Card';
 import { requireAuth } from '@/lib/auth/session';
 import { createServiceClient } from '@/lib/supabase/server';
 import { ProctorDashboard } from '@/components/proctor/ProctorDashboard';
-import { ROLE_NAMES } from '@/lib/rbac/roles';
+import { ROLE_NAMES, isChapterChair, canAssignProctors } from '@/lib/rbac/roles';
 import Link from 'next/link';
 import { Button } from '@/components/ui/Button';
 
@@ -13,17 +13,16 @@ export default async function ProctorPage() {
 
   const { data: viewer } = await supabase
     .from('users')
-    .select('id, role:roles(name), role_id, chapter_id')
+    .select('id, role:roles(*), role_id, chapter_id')
     .eq('id', session.userId)
     .single();
 
-  const viewerRoleName = (viewer as any)?.role?.name ?? (viewer as any)?.role?.[0]?.name;
-  const viewerRoleLevel = (viewer as any)?.role?.level ?? (viewer as any)?.role?.[0]?.level;
+  // Handle role response - it can be an object or array
+  const role = Array.isArray((viewer as any)?.role) ? (viewer as any).role[0] : (viewer as any)?.role;
+  const viewerRoleName = role?.name;
+  const viewerRoleLevel = role?.level;
 
-  const canAssign =
-    viewerRoleName === ROLE_NAMES.SB_CHAIR ||
-    viewerRoleName === ROLE_NAMES.SB_SECRETARY ||
-    viewerRoleName === ROLE_NAMES.CHAPTER_CHAIR;
+  const canAssign = canAssignProctors(viewerRoleName);
 
   // Get assigned execoms for this proctor
   const { data: mappings } = await supabase
