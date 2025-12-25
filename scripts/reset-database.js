@@ -51,79 +51,64 @@ async function resetDatabase() {
   console.log('Starting database reset...\n');
 
   try {
-    // Disable RLS temporarily for deletion (service role bypasses anyway, but just in case)
+    // Delete in correct order (child tables first to respect foreign keys)
     console.log('Deleting data from all tables...\n');
 
     for (const table of TABLES_TO_DELETE) {
       try {
-        // Delete all rows from table
-        const { error, count } = await supabase
+        // First, try to get count of rows
+        const { count } = await supabase
           .from(table)
-          .delete()
-          .neq('id', '00000000-0000-0000-0000-000000000000'); // Delete all (using a condition that's always true)
+          .select('*', { count: 'exact', head: true });
         
-        if (error) {
-          // If delete with condition fails, try without condition
-          const { error: error2 } = await supabase
-            .from(table)
-            .delete()
-            .gte('created_at', '1970-01-01'); // Another way to delete all
-          
-          if (error2) {
-            console.error(`⚠️  Error deleting from ${table}:`, error2.message);
-          } else {
-            console.log(`✓ Cleared table: ${table}`);
-          }
-        } else {
-          console.log(`✓ Cleared table: ${table}`);
+        if (count === 0) {
+          console.log(`✓ Table ${table} is already empty`);
+          continue;
         }
-      } catch (err) {
-        console.error(`⚠️  Error with table ${table}:`, err.message);
-      }
-    }
 
-    // Alternative approach: Use raw SQL to truncate tables (faster and more reliable)
-    console.log('\nUsing SQL TRUNCATE for complete reset...\n');
-    
-    // Truncate in reverse order (child tables first)
-    const truncateOrder = [
-      'notifications',
-      'proctor_updates',
-      'proctor_mappings',
-      'event_documents',
-      'event_assignments',
-      'event_approvals',
-      'calendar_blocks',
-      'chapter_documents',
-      'events',
-      'users',
-      'chapters',
-      'roles',
-    ];
-
-    // Use RPC or direct SQL execution
-    // Since we're using service role, we can use raw SQL
-    for (const table of truncateOrder) {
-      try {
-        // Use Supabase's RPC or execute raw SQL
-        // Note: Supabase JS client doesn't support raw SQL directly
-        // So we'll use delete with a condition that matches all rows
+        // Delete all rows - use a condition that matches all rows
+        // We'll delete in batches if needed, but try all at once first
         const { error } = await supabase
           .from(table)
           .delete()
-          .gte('created_at', '1900-01-01'); // Match all dates
+          .gte('created_at', '1900-01-01'); // Match all dates (should match all rows)
         
         if (error) {
-          console.error(`⚠️  Could not clear ${table}:`, error.message);
+          // If that fails, try deleting without condition (some Supabase versions support this)
+          const { error: error2 } = await supabase
+            .from(table)
+            .delete()
+            .neq('id', '00000000-0000-0000-0000-000000000000'); // Always true condition
+          
+          if (error2) {
+            console.error(`⚠️  Error deleting from ${table}:`, error2.message);
+            console.error(`   You may need to run the SQL script directly in Supabase SQL Editor`);
+            continue;
+          }
+        }
+        
+        // Verify deletion
+        const { count: remainingCount } = await supabase
+          .from(table)
+          .select('*', { count: 'exact', head: true });
+        
+        if (remainingCount === 0) {
+          console.log(`✓ Cleared table: ${table} (${count} rows deleted)`);
         } else {
-          console.log(`✓ Cleared table: ${table}`);
+          console.log(`⚠️  Table ${table} still has ${remainingCount} rows remaining`);
+          console.log(`   You may need to run the SQL script directly in Supabase SQL Editor`);
         }
       } catch (err) {
-        console.error(`⚠️  Error truncating ${table}:`, err.message);
+        console.error(`⚠️  Error with table ${table}:`, err.message);
+        console.error(`   You may need to run the SQL script directly in Supabase SQL Editor`);
       }
     }
 
     console.log('\n✅ Database reset complete!');
+    console.log('\n📝 Note: If some tables still have data, use the SQL script instead:');
+    console.log('   1. Open Supabase Dashboard → SQL Editor');
+    console.log('   2. Copy and paste contents of scripts/reset-database.sql');
+    console.log('   3. Run the SQL script');
     console.log('\nNext steps:');
     console.log('1. Run the seed script to populate with fresh data:');
     console.log('   node scripts/seed-database.js');
@@ -131,6 +116,10 @@ async function resetDatabase() {
     
   } catch (error) {
     console.error('❌ Database reset failed:', error);
+    console.error('\n💡 Try using the SQL script instead:');
+    console.error('   1. Open Supabase Dashboard → SQL Editor');
+    console.error('   2. Copy and paste contents of scripts/reset-database.sql');
+    console.error('   3. Run the SQL script');
     process.exit(1);
   }
 }
