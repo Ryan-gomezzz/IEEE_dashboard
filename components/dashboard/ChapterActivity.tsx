@@ -3,11 +3,15 @@ import { createServiceClient } from '@/lib/supabase/server';
 
 export async function ChapterActivity() {
   const supabase = await createServiceClient();
-  const { data: activitiesData } = await supabase
+  const { data: activitiesData, error } = await supabase
     .from('chapter_documents')
     .select('id, title, document_type, document_date, chapter:chapters(name)')
     .order('created_at', { ascending: false })
     .limit(5);
+
+  if (error) {
+    console.error('Error fetching chapter activity:', error);
+  }
 
   const activities = activitiesData || [];
 

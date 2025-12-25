@@ -24,7 +24,24 @@ export async function PendingApprovals() {
     return null;
   }
 
-  const roleLevel = getRoleLevel(user.role.name);
+  // Handle role response - it can be an object or array
+  const role = Array.isArray((user as any)?.role) ? (user as any).role[0] : (user as any)?.role;
+  const roleName = role?.name;
+
+  if (!roleName) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle>Pending Approvals</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <p className="text-gray-500 text-sm">Unable to load approvals</p>
+        </CardContent>
+      </Card>
+    );
+  }
+
+  const roleLevel = getRoleLevel(roleName);
   
   // Build query based on user's role
   let query = supabase
@@ -36,11 +53,17 @@ export async function PendingApprovals() {
   // If user is senior core, show only senior_core approvals
   if (isSeniorCore(roleLevel)) {
     query = query.eq('approval_type', 'senior_core');
-  } else if (isTreasurer(user.role.name)) {
+  } else if (isTreasurer(roleName)) {
     query = query.eq('approval_type', 'treasurer');
+  } else if (roleName === 'Branch Counsellor') {
+    query = query.eq('approval_type', 'counsellor');
   }
 
-  const { data: approvals } = await query.order('created_at', { ascending: false }).limit(5);
+  const { data: approvals, error } = await query.order('created_at', { ascending: false }).limit(5);
+
+  if (error) {
+    console.error('Error fetching pending approvals:', error);
+  }
 
   return (
     <Card>
@@ -60,7 +83,11 @@ export async function PendingApprovals() {
               >
                 <h4 className="font-medium text-gray-900 text-sm">{approval.event?.title}</h4>
                 <p className="text-xs text-gray-500 mt-1">
-                  {approval.event?.chapter?.name} • {approval.approval_type.replace('_', ' ')}
+                  {(() => {
+                    const event = approval.event;
+                    const chapter = Array.isArray(event?.chapter) ? event?.chapter[0] : event?.chapter;
+                    return `${chapter?.name || 'Unknown'} • ${approval.approval_type.replace('_', ' ')}`;
+                  })()}
                 </p>
               </Link>
             ))}

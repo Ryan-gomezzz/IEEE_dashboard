@@ -8,12 +8,16 @@ export async function AssignedTasks() {
   if (!session) return null;
 
   const supabase = await createServiceClient();
-  const { data: tasksData } = await supabase
+  const { data: tasksData, error } = await supabase
     .from('event_assignments')
     .select('id, team_type, event:events(id,title,proposed_date,chapter:chapters(name))')
     .eq('assigned_to', session.userId)
     .order('created_at', { ascending: false })
     .limit(5);
+
+  if (error) {
+    console.error('Error fetching assigned tasks:', error);
+  }
 
   const tasks = tasksData || [];
 

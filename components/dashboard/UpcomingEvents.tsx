@@ -5,13 +5,17 @@ export async function UpcomingEvents() {
   const supabase = await createServiceClient();
   const today = new Date().toISOString().slice(0, 10);
 
-  const { data: eventsData } = await supabase
+  const { data: eventsData, error } = await supabase
     .from('events')
     .select('id, title, proposed_date, chapter:chapters(name)')
     .eq('status', 'approved')
     .gte('proposed_date', today)
     .order('proposed_date', { ascending: true })
     .limit(5);
+
+  if (error) {
+    console.error('Error fetching upcoming events:', error);
+  }
 
   const events = eventsData || [];
 

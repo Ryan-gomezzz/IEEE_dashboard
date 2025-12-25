@@ -7,13 +7,17 @@ export async function Notifications() {
   if (!session) return null;
 
   const supabase = await createServiceClient();
-  const { data: notificationsData } = await supabase
+  const { data: notificationsData, error } = await supabase
     .from('notifications')
     .select('*')
     .eq('user_id', session.userId)
     .eq('read', false)
     .order('created_at', { ascending: false })
     .limit(5);
+
+  if (error) {
+    console.error('Error fetching notifications:', error);
+  }
 
   const notifications = notificationsData || [];
 
