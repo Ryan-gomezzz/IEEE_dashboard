@@ -117,7 +117,9 @@ export async function getEventApprovalStatus(eventId: string) {
   const seniorCoreApproved = approvedSeniorCoreApprovers.size;
 
   const treasurerApproved = treasurerApprovals.some(a => a.status === 'approved');
+  const treasurerPending = treasurerApprovals.some(a => a.status === 'pending');
   const counsellorApproved = counsellorApprovals.some(a => a.status === 'approved');
+  const counsellorPending = counsellorApprovals.some(a => a.status === 'pending');
 
   return {
     seniorCore: {
@@ -130,13 +132,13 @@ export async function getEventApprovalStatus(eventId: string) {
     treasurer: {
       required: 1,
       approved: treasurerApproved ? 1 : 0,
-      pending: treasurerApprovals.some(a => a.status === 'pending') ? 1 : 0,
+      pending: treasurerPending ? 1 : 0,
       rejected: treasurerApprovals.some(a => a.status === 'rejected'),
     },
     counsellor: {
       required: 1,
       approved: counsellorApproved ? 1 : 0,
-      pending: counsellorApprovals.some(a => a.status === 'pending') ? 1 : 0,
+      pending: counsellorPending ? 1 : 0,
       rejected: counsellorApprovals.some(a => a.status === 'rejected'),
     },
   };
@@ -253,6 +255,14 @@ async function updateEventStatus(eventId: string) {
     console.log(`Updating event status for ${eventId}. Current status: ${currentEvent.status}`);
 
     const approvalStatus = await getEventApprovalStatus(eventId);
+    
+    // Debug logging
+    console.log(`Approval status for event ${eventId}:`, {
+      seniorCore: approvalStatus.seniorCore,
+      treasurer: approvalStatus.treasurer,
+      counsellor: approvalStatus.counsellor,
+    });
+    
     const newStatus = computeEventStatusFromApprovals({
       seniorCoreApprovedCount: approvalStatus.seniorCore.approved,
       seniorCoreRejected: approvalStatus.seniorCore.rejected,
@@ -263,6 +273,12 @@ async function updateEventStatus(eventId: string) {
     });
 
     console.log(`Computed new status for event ${eventId}: ${newStatus} (from ${currentEvent.status})`);
+    console.log(`Status transition details:`, {
+      currentStatus: currentEvent.status,
+      newStatus,
+      treasurerApproved: approvalStatus.treasurer.approved >= 1,
+      treasurerApprovedCount: approvalStatus.treasurer.approved,
+    });
 
   // Create missing approval records as the workflow advances
   if (newStatus === 'treasurer_pending') {
@@ -401,15 +417,19 @@ async function updateEventStatus(eventId: string) {
         }
 
       } else {
-        const { error: updateError } = await supabase
+        const { error: updateError, data: updatedEvent } = await supabase
           .from('events')
-          .update({ status: newStatus })
-          .eq('id', eventId);
+          .update({ status: newStatus, updated_at: new Date().toISOString() })
+          .eq('id', eventId)
+          .select()
+          .single();
 
         if (updateError) {
           console.error(`Error updating event ${eventId} status to ${newStatus}:`, updateError);
           throw updateError;
         }
+        
+        console.log(`Successfully updated event ${eventId} status to ${newStatus}`, updatedEvent);
       }
 
       // 2. Handle Calendar Blocking
