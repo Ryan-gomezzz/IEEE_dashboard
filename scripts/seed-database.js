@@ -47,6 +47,7 @@ const ROLES = [
   { name: 'SB Treasurer', level: 1 },
   { name: 'SB Technical Head', level: 1 },
   { name: 'SB Convener', level: 1 },
+  { name: 'Branch Counsellor', level: 1 },
 
   // Level 2 - Vice Core
   { name: 'Vice Chair', level: 2 },
@@ -84,6 +85,7 @@ const DEMO_ACCOUNTS = [
   { email: 'sb.treasurer@ieee.org', name: 'SB Treasurer', password: '12345', roleName: 'SB Treasurer', chapterCode: 'SB' },
   { email: 'sb.technical@ieee.org', name: 'SB Technical Head', password: '12345', roleName: 'SB Technical Head', chapterCode: 'SB' },
   { email: 'sb.convener@ieee.org', name: 'SB Convener', password: '12345', roleName: 'SB Convener', chapterCode: 'SB' },
+  { email: 'branch.counsellor@ieee.org', name: 'Branch Counsellor', password: '12345', roleName: 'Branch Counsellor', chapterCode: 'SB' },
   { email: 'ras.chair@ieee.org', name: 'RAS Chair', password: '12345', roleName: 'RAS Chair', chapterCode: 'RAS' },
   { email: 'cs.chair@ieee.org', name: 'CS Chair', password: '12345', roleName: 'CS Chair', chapterCode: 'CS' },
   { email: 'pr.head@ieee.org', name: 'PR Head', password: '12345', roleName: 'PR Head', chapterCode: null },

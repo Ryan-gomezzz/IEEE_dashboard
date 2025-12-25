@@ -12,19 +12,27 @@ export default async function ApprovalsPage() {
   const supabase = await createServiceClient();
 
   // Get user's role
-  const { data: user } = await supabase
+  const { data: user, error: userError } = await supabase
     .from('users')
     .select('*, role:roles(*)')
     .eq('id', session.userId)
     .single();
 
+  if (userError) {
+    console.error('Error fetching user:', userError);
+  }
+
   // Get pending approvals for this user
-  const { data: approvals } = await supabase
+  const { data: approvals, error: approvalsError } = await supabase
     .from('event_approvals')
     .select('*, event:events(*, chapter:chapters(*)), approver:users(*)')
     .eq('status', 'pending')
     .eq('approver_id', session.userId)
     .order('created_at', { ascending: false });
+
+  if (approvalsError) {
+    console.error('Error fetching approvals:', approvalsError);
+  }
 
   return (
     <div>

@@ -43,24 +43,60 @@ export async function createEventProposal(data: {
 async function createApprovalRecords(eventId: string, proposedBy: string) {
   const supabase = await createServiceClient();
 
-  // Get users and roles so we can pick the exact 5 Senior Core approvers.
-  const { data: allUsers } = await supabase
-    .from('users')
-    .select('id, role:roles(name)')
-    .neq('id', proposedBy);
+  try {
+    // Get users and roles so we can pick the exact 5 Senior Core approvers.
+    // Use standard pattern: select full role object to handle both array and object responses
+    const { data: allUsers, error: usersError } = await supabase
+      .from('users')
+      .select('id, role:roles(*)')
+      .neq('id', proposedBy);
 
-  const seniorCore = allUsers?.filter((user: any) => isSeniorCoreApprover(user.role?.name)) || [];
-
-  if (seniorCore && seniorCore.length > 0) {
-    // Create senior core approval records
-    for (const member of seniorCore) {
-      await supabase.from('event_approvals').insert({
-        event_id: eventId,
-        approver_id: member.id,
-        approval_type: 'senior_core',
-        status: 'pending',
-      });
+    if (usersError) {
+      console.error('Error fetching users for approval records:', usersError);
+      throw usersError;
     }
+
+    if (!allUsers || allUsers.length === 0) {
+      console.warn('No users found to create approval records');
+      return;
+    }
+
+    // Handle role response - it can be an object or array depending on Supabase version
+    const seniorCore = allUsers.filter((user: any) => {
+      const role = Array.isArray(user.role) ? user.role[0] : user.role;
+      const roleName = role?.name;
+      return roleName && isSeniorCoreApprover(roleName);
+    });
+
+    if (seniorCore.length === 0) {
+      console.warn('No Senior Core approvers found to create approval records');
+      return;
+    }
+
+    console.log(`Creating approval records for ${seniorCore.length} Senior Core members for event ${eventId}`);
+
+    // Create senior core approval records
+    const approvalRecords = seniorCore.map((member) => ({
+      event_id: eventId,
+      approver_id: member.id,
+      approval_type: 'senior_core' as const,
+      status: 'pending' as const,
+    }));
+
+    const { error: insertError } = await supabase
+      .from('event_approvals')
+      .insert(approvalRecords);
+
+    if (insertError) {
+      console.error('Error creating approval records:', insertError);
+      throw insertError;
+    }
+
+    console.log(`Successfully created ${approvalRecords.length} approval records`);
+  } catch (error) {
+    console.error('Failed to create approval records:', error);
+    // Don't throw - we want event creation to succeed even if approval record creation fails
+    // The error is logged for debugging
   }
 }
 
@@ -111,21 +147,33 @@ export async function submitApproval(data: {
 }) {
   const supabase = await createServiceClient();
 
+  console.log(`Submitting approval for event ${data.event_id} by user ${data.approver_id}: ${data.approval_type} - ${data.status}`);
+
   // Enforce strict stage gating by current event status
-  const { data: currentEventForGate } = await supabase
+  const { data: currentEventForGate, error: eventError } = await supabase
     .from('events')
     .select('status')
     .eq('id', data.event_id)
     .single();
 
+  if (eventError) {
+    console.error(`Error fetching event ${data.event_id}:`, eventError);
+    throw new Error('Event not found');
+  }
+
   if (!currentEventForGate) {
     throw new Error('Event not found');
   }
 
-  assertApprovalTypeAllowedForEventStatus(currentEventForGate.status as EventStatus, data.approval_type);
+  try {
+    assertApprovalTypeAllowedForEventStatus(currentEventForGate.status as EventStatus, data.approval_type);
+  } catch (error) {
+    console.error(`Approval type not allowed for event status:`, error);
+    throw error;
+  }
 
   // Update or create approval record
-  const { data: existing } = await supabase
+  const { data: existing, error: existingError } = await supabase
     .from('event_approvals')
     .select('*')
     .eq('event_id', data.event_id)
@@ -133,25 +181,38 @@ export async function submitApproval(data: {
     .eq('approval_type', data.approval_type)
     .single();
 
+  if (existingError && existingError.code !== 'PGRST116') {
+    // PGRST116 is "not found" which is expected if no record exists
+    console.error('Error fetching existing approval:', existingError);
+    throw existingError;
+  }
+
   if (!existing) {
     // Strict workflow: approvals must be pre-created and tied to an approver.
+    console.error(`No approval record found for event ${data.event_id}, approver ${data.approver_id}, type ${data.approval_type}`);
     throw new Error('No approval is assigned to this user for this event');
   }
 
   if (existing.status !== 'pending') {
+    console.warn(`Approval ${existing.id} is no longer pending (current status: ${existing.status})`);
     throw new Error('This approval is no longer pending');
   }
 
-  if (existing) {
-    await supabase
-      .from('event_approvals')
-      .update({
-        status: data.status,
-        comments: data.comments,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', existing.id);
+  const { error: updateError } = await supabase
+    .from('event_approvals')
+    .update({
+      status: data.status,
+      comments: data.comments,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', existing.id);
+
+  if (updateError) {
+    console.error('Error updating approval record:', updateError);
+    throw updateError;
   }
+
+  console.log(`Approval record ${existing.id} updated to ${data.status}`);
 
   // Update event status based on approvals
   await updateEventStatus(data.event_id);
@@ -162,92 +223,186 @@ export async function submitApproval(data: {
 async function updateEventStatus(eventId: string) {
   const supabase = await createServiceClient();
 
-  // Fetch current event to check status transitions
-  const { data: currentEvent } = await supabase
-    .from('events')
-    .select('status, proposed_date')
-    .eq('id', eventId)
-    .single();
+  try {
+    // Fetch current event to check status transitions
+    const { data: currentEvent, error: eventError } = await supabase
+      .from('events')
+      .select('status, proposed_date')
+      .eq('id', eventId)
+      .single();
 
-  if (!currentEvent) return;
+    if (eventError) {
+      console.error(`Error fetching event ${eventId}:`, eventError);
+      return;
+    }
 
-  const approvalStatus = await getEventApprovalStatus(eventId);
-  const newStatus = computeEventStatusFromApprovals({
-    seniorCoreApprovedCount: approvalStatus.seniorCore.approved,
-    seniorCoreRejected: approvalStatus.seniorCore.rejected,
-    treasurerApproved: approvalStatus.treasurer.approved >= 1,
-    treasurerRejected: approvalStatus.treasurer.rejected,
-    counsellorApproved: approvalStatus.counsellor.approved >= 1,
-    counsellorRejected: approvalStatus.counsellor.rejected,
-  });
+    if (!currentEvent) {
+      console.warn(`Event ${eventId} not found`);
+      return;
+    }
+
+    console.log(`Updating event status for ${eventId}. Current status: ${currentEvent.status}`);
+
+    const approvalStatus = await getEventApprovalStatus(eventId);
+    const newStatus = computeEventStatusFromApprovals({
+      seniorCoreApprovedCount: approvalStatus.seniorCore.approved,
+      seniorCoreRejected: approvalStatus.seniorCore.rejected,
+      treasurerApproved: approvalStatus.treasurer.approved >= 1,
+      treasurerRejected: approvalStatus.treasurer.rejected,
+      counsellorApproved: approvalStatus.counsellor.approved >= 1,
+      counsellorRejected: approvalStatus.counsellor.rejected,
+    });
+
+    console.log(`Computed new status for event ${eventId}: ${newStatus} (from ${currentEvent.status})`);
 
   // Create missing approval records as the workflow advances
   if (newStatus === 'treasurer_pending') {
     if (!approvalStatus.treasurer.approved && approvalStatus.treasurer.pending === 0) {
-      const { data: allUsers } = await supabase
-        .from('users')
-        .select('id, role:roles(name)');
+      try {
+        const { data: allUsers, error: usersError } = await supabase
+          .from('users')
+          .select('id, role:roles(*)');
 
-      const treasurer = allUsers?.find((u: any) => u.role?.name === ROLE_NAMES.SB_TREASURER);
-      if (!treasurer) throw new Error('SB Treasurer role not found in users table');
+        if (usersError) {
+          console.error('Error fetching users for treasurer approval:', usersError);
+          throw usersError;
+        }
 
-      await supabase.from('event_approvals').insert({
-        event_id: eventId,
-        approver_id: treasurer.id,
-        approval_type: 'treasurer',
-        status: 'pending',
-      });
+        // Handle role response - it can be an object or array
+        const treasurer = allUsers?.find((u: any) => {
+          const role = Array.isArray(u.role) ? u.role[0] : u.role;
+          return role?.name === ROLE_NAMES.SB_TREASURER;
+        });
+
+        if (!treasurer) {
+          console.error('SB Treasurer role not found in users table');
+          throw new Error('SB Treasurer role not found in users table');
+        }
+
+        const { error: insertError } = await supabase.from('event_approvals').insert({
+          event_id: eventId,
+          approver_id: treasurer.id,
+          approval_type: 'treasurer',
+          status: 'pending',
+        });
+
+        if (insertError) {
+          console.error('Error creating treasurer approval record:', insertError);
+          throw insertError;
+        }
+
+        console.log(`Created treasurer approval record for event ${eventId}`);
+      } catch (error) {
+        console.error('Failed to create treasurer approval record:', error);
+        // Don't throw - allow workflow to continue
+      }
     }
   }
 
   if (newStatus === 'counsellor_pending') {
     if (!approvalStatus.counsellor.approved && approvalStatus.counsellor.pending === 0) {
-      const { data: allUsers } = await supabase
-        .from('users')
-        .select('id, role:roles(name)');
+      try {
+        const { data: allUsers, error: usersError } = await supabase
+          .from('users')
+          .select('id, role:roles(*)');
 
-      const counsellor = allUsers?.find((u: any) => u.role?.name === ROLE_NAMES.SB_COUNSELLOR);
-      if (!counsellor) throw new Error('Branch Counsellor role not found in users table');
+        if (usersError) {
+          console.error('Error fetching users for counsellor approval:', usersError);
+          throw usersError;
+        }
 
-      await supabase.from('event_approvals').insert({
-        event_id: eventId,
-        approver_id: counsellor.id,
-        approval_type: 'counsellor',
-        status: 'pending',
-      });
+        // Handle role response - it can be an object or array
+        const counsellor = allUsers?.find((u: any) => {
+          const role = Array.isArray(u.role) ? u.role[0] : u.role;
+          return role?.name === ROLE_NAMES.SB_COUNSELLOR;
+        });
+
+        if (!counsellor) {
+          console.error('Branch Counsellor role not found in users table');
+          throw new Error('Branch Counsellor role not found in users table');
+        }
+
+        const { error: insertError } = await supabase.from('event_approvals').insert({
+          event_id: eventId,
+          approver_id: counsellor.id,
+          approval_type: 'counsellor',
+          status: 'pending',
+        });
+
+        if (insertError) {
+          console.error('Error creating counsellor approval record:', insertError);
+          throw insertError;
+        }
+
+        console.log(`Created counsellor approval record for event ${eventId}`);
+      } catch (error) {
+        console.error('Failed to create counsellor approval record:', error);
+        // Don't throw - allow workflow to continue
+      }
     }
   }
 
-  // Update logic: Only if status changed
-  if (newStatus !== currentEvent.status) {
-    // 1. Update Database
-    if (newStatus === 'approved') {
-      await supabase
-        .from('events')
-        .update({
-          status: newStatus,
-          approved_date: currentEvent.proposed_date || new Date().toISOString(),
-        })
-        .eq('id', eventId);
+    // Update logic: Only if status changed
+    if (newStatus !== currentEvent.status) {
+      console.log(`Status changed for event ${eventId}: ${currentEvent.status} -> ${newStatus}`);
 
-      // Trigger notifications for teams
-      const { createTeamNotifications } = await import('@/lib/notifications/notification-service');
-      await createTeamNotifications(eventId);
+      // 1. Update Database
+      if (newStatus === 'approved') {
+        const { error: updateError } = await supabase
+          .from('events')
+          .update({
+            status: newStatus,
+            approved_date: currentEvent.proposed_date || new Date().toISOString(),
+          })
+          .eq('id', eventId);
 
+        if (updateError) {
+          console.error(`Error updating event ${eventId} to approved:`, updateError);
+          throw updateError;
+        }
+
+        // Trigger notifications for teams
+        try {
+          const { createTeamNotifications } = await import('@/lib/notifications/notification-service');
+          await createTeamNotifications(eventId);
+          console.log(`Team notifications created for approved event ${eventId}`);
+        } catch (notifError) {
+          console.error(`Error creating team notifications for event ${eventId}:`, notifError);
+          // Don't throw - event approval should succeed even if notifications fail
+        }
+
+      } else {
+        const { error: updateError } = await supabase
+          .from('events')
+          .update({ status: newStatus })
+          .eq('id', eventId);
+
+        if (updateError) {
+          console.error(`Error updating event ${eventId} status to ${newStatus}:`, updateError);
+          throw updateError;
+        }
+      }
+
+      // 2. Handle Calendar Blocking
+      const wasCounted = CALENDAR_COUNTED_STATUSES.includes(currentEvent.status as EventStatus);
+      const isCounted = CALENDAR_COUNTED_STATUSES.includes(newStatus);
+
+      if (!wasCounted && isCounted) {
+        // Transition IN to counted state -> Block/Increment
+        try {
+          await updateCalendarBlock(new Date(currentEvent.proposed_date), true);
+          console.log(`Calendar block updated for event ${eventId}`);
+        } catch (calendarError) {
+          console.error(`Error updating calendar block for event ${eventId}:`, calendarError);
+          // Don't throw - event status update should succeed even if calendar update fails
+        }
+      }
     } else {
-      await supabase
-        .from('events')
-        .update({ status: newStatus })
-        .eq('id', eventId);
+      console.log(`No status change for event ${eventId} (still ${currentEvent.status})`);
     }
-
-    // 2. Handle Calendar Blocking
-    const wasCounted = CALENDAR_COUNTED_STATUSES.includes(currentEvent.status as EventStatus);
-    const isCounted = CALENDAR_COUNTED_STATUSES.includes(newStatus);
-
-    if (!wasCounted && isCounted) {
-      // Transition IN to counted state -> Block/Increment
-      await updateCalendarBlock(new Date(currentEvent.proposed_date), true);
-    }
+  } catch (error) {
+    console.error(`Failed to update event status for ${eventId}:`, error);
+    // Re-throw to let caller handle it
+    throw error;
   }
 }

@@ -5,12 +5,16 @@ export async function createTeamNotifications(eventId: string) {
 
   const { data: allUsers, error: userError } = await supabase
     .from('users')
-    .select('id, role:roles(name)');
+    .select('id, role:roles(*)');
 
   if (userError) throw userError;
 
   const TEAM_HEAD_ROLES = new Set(['PR Head', 'Design Head', 'Documentation Head', 'Coverage Head']);
-  const teamHeads = (allUsers || []).filter((u: any) => TEAM_HEAD_ROLES.has(u.role?.name));
+  // Handle role response - it can be an object or array
+  const teamHeads = (allUsers || []).filter((u: any) => {
+    const role = Array.isArray(u.role) ? u.role[0] : u.role;
+    return role?.name && TEAM_HEAD_ROLES.has(role.name);
+  });
 
   if (teamHeads.length === 0) return;
 
@@ -44,11 +48,15 @@ export async function createSecretaryNotification(eventId: string, docTitle: str
 
   const { data: allUsers, error: userError } = await supabase
     .from('users')
-    .select('id, role:roles(name)');
+    .select('id, role:roles(*)');
 
   if (userError) throw userError;
 
-  const secretaries = (allUsers || []).filter((u: any) => u.role?.name === 'SB Secretary');
+  // Handle role response - it can be an object or array
+  const secretaries = (allUsers || []).filter((u: any) => {
+    const role = Array.isArray(u.role) ? u.role[0] : u.role;
+    return role?.name === 'SB Secretary';
+  });
   if (secretaries.length === 0) return;
 
   const { data: event, error: eventError } = await supabase
